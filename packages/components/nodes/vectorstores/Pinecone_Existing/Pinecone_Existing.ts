@@ -2,6 +2,7 @@ import { INode, INodeData, INodeOutputsValue, INodeParams } from '../../../src/I
 import { PineconeClient } from '@pinecone-database/pinecone'
 import { PineconeLibArgs, PineconeStore } from 'langchain/vectorstores/pinecone'
 import { Embeddings } from 'langchain/embeddings/base'
+import { Document } from 'langchain/document'
 import { getBaseClasses } from '../../../src/utils'
 
 class Pinecone_Existing_VectorStores implements INode {
@@ -67,6 +68,15 @@ class Pinecone_Existing_VectorStores implements INode {
                 type: 'number',
                 additionalParams: true,
                 optional: true
+            },
+            {
+                label: 'Min Score',
+                name: 'minScore',
+                description: 'The minimum score (1-100) of results that will be used to build the reply',
+                placeholder: '75',
+                type: 'number',
+                additionalParams: true,
+                optional: true
             }
         ]
         this.outputs = [
@@ -88,6 +98,7 @@ class Pinecone_Existing_VectorStores implements INode {
         const pineconeEnv = nodeData.inputs?.pineconeEnv as string
         const index = nodeData.inputs?.pineconeIndex as string
         const pineconeNamespace = nodeData.inputs?.pineconeNamespace as string
+        const minScore = nodeData.inputs?.minScore as string
         const pineconeMetadataFilter = nodeData.inputs?.pineconeMetadataFilter
         const embeddings = nodeData.inputs?.embeddings as Embeddings
         const output = nodeData.outputs?.output as string
@@ -102,7 +113,7 @@ class Pinecone_Existing_VectorStores implements INode {
 
         const pineconeIndex = client.Index(index)
 
-        const obj: PineconeLibArgs = {
+        const obj: PineconeLibArgs & Partial<PineconeScore> = {
             pineconeIndex
         }
 
@@ -111,8 +122,12 @@ class Pinecone_Existing_VectorStores implements INode {
             const metadatafilter = typeof pineconeMetadataFilter === 'object' ? pineconeMetadataFilter : JSON.parse(pineconeMetadataFilter)
             obj.filter = metadatafilter
         }
+        if (minScore) {
+            const minimumScore = parseInt(minScore, 10)
+            obj.score = minimumScore / 100
+        }
 
-        const vectorStore = await PineconeStore.fromExistingIndex(embeddings, obj)
+        const vectorStore = await PineconeExisting.fromExistingIndex(embeddings, obj)
 
         if (output === 'retriever') {
             const retriever = vectorStore.asRetriever(k)
@@ -122,6 +137,63 @@ class Pinecone_Existing_VectorStores implements INode {
             return vectorStore
         }
         return vectorStore
+    }
+}
+
+type PineconeMetadata = Record<string, any>
+
+interface PineconeScore {
+    score: number
+}
+
+class PineconeExisting extends PineconeStore {
+    scoreThreshold?: number
+
+    constructor(embeddings: Embeddings, args: PineconeLibArgs & Partial<PineconeScore>) {
+        super(embeddings, args)
+        this.scoreThreshold = args.score
+    }
+
+    static async fromExistingIndex(embeddings: Embeddings, dbConfig: PineconeLibArgs & Partial<PineconeScore>): Promise<PineconeStore> {
+        const instance = new this(embeddings, dbConfig)
+        return instance
+    }
+
+    // @ts-ignore
+    async similaritySearchVectorWithScore(query: number[], k: number, filter?: PineconeMetadata): Promise<[Document, number][]> {
+        if (filter && this.filter) {
+            throw new Error('cannot provide both `filter` and `this.filter`')
+        }
+        const _filter = filter ?? this.filter
+        const results = await this.pineconeIndex.query({
+            queryRequest: {
+                includeMetadata: true,
+                namespace: this.namespace,
+                topK: k,
+                vector: query,
+                filter: _filter
+            }
+        })
+
+        const result: [Document, number][] = []
+
+        if (results.matches) {
+            for (const res of results.matches) {
+                const { [this.textKey]: pageContent, ...metadata } = (res.metadata ?? {}) as PineconeMetadata
+                if (res.score) {
+                    console.log('SEARCHINGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG = ', res.score)
+                    if (this.scoreThreshold && res.score >= this.scoreThreshold) {
+                        result.push([new Document({ metadata, pageContent }), res.score])
+                    } else if (this.scoreThreshold && res.score < this.scoreThreshold) {
+                        continue
+                    } else {
+                        result.push([new Document({ metadata, pageContent }), res.score])
+                    }
+                }
+            }
+        }
+
+        return result
     }
 }
 

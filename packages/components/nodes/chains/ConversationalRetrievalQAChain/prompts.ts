@@ -33,3 +33,19 @@ Chat History:
 {chat_history}
 Follow Up Input: {question}
 Standalone question:`
+
+export const default_convo_chain_prompt = `Given the following conversation and a follow up question, answer the question at the end. If the AI does not know the answer to a question, it truthfully says it does not know.
+
+Chat History:
+{chat_history}
+
+Question: {question}
+Helpful Answer:`
+
+export const convo_chain_prompt = `Given the following conversation and a follow up question, answer the question at the end.
+
+Chat History:
+{chat_history}
+
+Question: {question}
+Helpful Answer:`
